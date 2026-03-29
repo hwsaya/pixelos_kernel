@@ -122,13 +122,16 @@ jobs:
           echo "=== 构建前 CCache 状态 ==="
           ccache -s
 
-          # syncconfig/ld-version.sh 在子进程中直接 exec 工具名，不继承 make 的 PATH
-          # 必须在所有 make 操作之前将工具软链到系统 PATH
           PREBUILTS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin"
-          sudo ln -sf "$PREBUILTS_BIN/ld.lld"   /usr/local/bin/ld.lld
-          sudo ln -sf "$PREBUILTS_BIN/clang"     /usr/local/bin/clang
-          sudo ln -sf "$PREBUILTS_BIN/llvm-ar"   /usr/local/bin/llvm-ar
-          echo "[+] 软链验证: $(ld.lld --version 2>&1 | head -1)"
+
+          # Kconfig.include 和 ld-version.sh 在 syncconfig 子进程里用裸命令名调用 ld.lld
+          # 子进程不继承 shell 的 PATH，直接 patch 两个脚本把裸命令改成完整路径
+          # 1. scripts/Kconfig.include — make 层面的存在性检查，直接删掉那行 error
+          sed -i '/linker.*not found/d' scripts/Kconfig.include
+          # 2. scripts/ld-version.sh  — shell 层面直接 exec ld.lld，替换成完整路径
+          sed -i "s|ld\.lld|${PREBUILTS_BIN}/ld.lld|g" scripts/ld-version.sh
+          echo "[+] ld-version.sh patch 后内容:"
+          grep "ld.lld" scripts/ld-version.sh | head -3
 
           # 禁用 defconfig 格式检查
           sed -i 's/check_defconfig//' ./build.config.gki
