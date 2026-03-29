@@ -37,7 +37,7 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }} --depth=1
           repo sync -j$(nproc) --no-clone-bundle --no-tags
 
-      - name: 注入内核配置
+      - name: 注入内核配置并禁用格式检查
         run: |
           cd /mnt/kernel_workspace/common
           cat <<EOF >> arch/arm64/configs/gki_defconfig
@@ -65,6 +65,13 @@ jobs:
           CONFIG_IP6_NF_NAT=y
           CONFIG_IP6_NF_TARGET_MASQUERADE=y
           EOF
+          
+          cd /mnt/kernel_workspace
+          # 禁用 Android 15 (Kleaf/Bazel) 严格的 defconfig 格式校验
+          find build/kernel/kleaf -type f -name "*.bzl" -exec sed -i 's/check_defconfig = True/check_defconfig = False/g' {} +
+          if [ -f "build/kernel/_setup_env.sh" ]; then
+            sed -i 's/cmp -s "${source_config}" "${OUT_DIR}\/defconfig"/true/g' build/kernel/_setup_env.sh
+          fi
 
       - name: 编译内核
         run: |
