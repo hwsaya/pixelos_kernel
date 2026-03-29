@@ -125,12 +125,10 @@ jobs:
           # 禁用 defconfig 格式检查
           sed -i 's/check_defconfig//' ./build.config.gki
 
-          # 先用 gki_defconfig 初始化 out 目录结构
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" PAHOLE=pahole \
-            O=out gki_defconfig
+          # 直接创建 out 目录，无需 gki_defconfig
+          mkdir -p out
 
-          # 用设备实际运行的 config 覆盖，保留全部厂商配置
+          # 用设备实际运行的 config 作为基础
           cp "$GITHUB_WORKSPACE/kernel_config" out/.config
 
           # 追加 ipset 所需配置
@@ -174,10 +172,8 @@ jobs:
             sed -i 's/# CONFIG_CRYPTO_LZ4HC is not set/CONFIG_CRYPTO_LZ4HC=y/' out/.config
           fi
 
-          # olddefconfig：自动处理新增/删除的 Kconfig 符号，不弹交互提示
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" PAHOLE=pahole \
-            O=out olddefconfig
+          # olddefconfig：补全新增/删除的 Kconfig 符号，不需要编译器参数
+          make ARCH=arm64 O=out olddefconfig
 
           # 验证 ipset 已进入最终配置
           echo "=== 验证 ipset 配置 ==="
