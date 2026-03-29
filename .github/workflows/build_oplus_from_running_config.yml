@@ -1,0 +1,234 @@
+name: OnePlus 13T Kernel Build (from running config)
+
+# 使用说明：
+# 将你设备上提取的 config 文件放到仓库根目录，命名为 kernel_config
+# 这样编译出的内核以你当前运行的内核配置为基础，不会丢失任何功能
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_kernel_src:
+        description: "是否拉取远程内核源码(否则使用缓存)"
+        required: false
+        type: boolean
+        default: false
+      Apply_SCHED:
+        description: "是否添加风驰驱动"
+        required: false
+        type: boolean
+        default: false
+      lz4_upgrade:
+        description: "是否将 ZRAM 默认压缩算法升级为 LZ4"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: OnePlus 13T Kernel Build (running config base)
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_COMPILERCHECK: "none"
+      CCACHE_COMPRESS: "1"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache_oneplus_13t
+      CCACHE_MAXSIZE: "3G"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查 kernel_config 文件存在
+        run: |
+          if [ ! -f "$GITHUB_WORKSPACE/kernel_config" ]; then
+            echo "ERROR: 仓库根目录缺少 kernel_config 文件"
+            echo "请将设备上提取的 /proc/config.gz 解压后重命名为 kernel_config 提交到仓库"
+            exit 1
+          fi
+          echo "kernel_config 行数: $(wc -l < $GITHUB_WORKSPACE/kernel_config)"
+          echo "内核版本: $(grep 'Linux/arm64' $GITHUB_WORKSPACE/kernel_config | head -1)"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install -y --no-install-recommends libelf-dev tree dos2unix ccache
+
+      - name: Cache prebuilts (clang & build-tools)
+        id: prebuilts-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928
+            kernel_workspace/kernel_platform/prebuilts/kernel-build-tools/linux-x86
+          key: prebuilts-${{ runner.os }}-v1
+
+      - name: Cache kernel source
+        id: kernel-src-cache
+        uses: actions/cache@v4
+        with:
+          path: kernel_workspace/kernel_platform/common
+          key: kernel-src-v6.6.89
+          restore-keys:
+            kernel-src-v6.6.89
+
+      - name: Cache ccache
+        id: ccache-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-oneplus-13t-v1
+          restore-keys:
+            ccache-${{ runner.os }}-oneplus-13t-v1-
+
+      - name: Configure Git and repo
+        run: |
+          git config --global user.email "bot@kernelsu.org"
+          git config --global user.name "GitHubAction"
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+
+      - name: Initialize repo and sync
+        run: |
+          mkdir -p kernel_workspace && cd kernel_workspace
+          repo init -u https://github.com/OnePlusOSS/kernel_manifest.git \
+            -b refs/heads/oneplus/sm8750 -m oneplus_13t_b.xml --depth=1
+
+          if [ "${{ inputs.pull_kernel_src }}" = "true" ] || \
+             [ "${{ steps.kernel-src-cache.outputs.cache-hit }}" = "false" ]; then
+            repo sync kernel_platform/common \
+              -c --force-sync --optimized-fetch --prune --no-tags --no-clone-bundle \
+              -j$(nproc --all)
+          fi
+
+          if [ "${{ steps.prebuilts-cache.outputs.cache-hit }}" = "false" ]; then
+            repo sync kernel_platform/prebuilts/clang/host/linux-x86 \
+                      kernel_platform/prebuilts/kernel-build-tools \
+              -c --force-sync --optimized-fetch --prune --no-tags --no-clone-bundle \
+              -j$(nproc --all)
+          fi
+
+          rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
+
+      - name: Apply Convert HMBIRD_OGKI to HMBIRD_GKI
+        if: ${{ !inputs.Apply_SCHED }}
+        run: |
+          cp hmbird_patch.c kernel_workspace/kernel_platform/common/drivers/
+          cd kernel_workspace/kernel_platform/common/drivers
+          if ! grep -q "hmbird_patch.o" Makefile; then
+            echo "obj-y += hmbird_patch.o" >> Makefile
+          fi
+
+      - name: Apply SCHED
+        if: ${{ inputs.Apply_SCHED }}
+        run: |
+          git clone https://github.com/Numbersf/SCHED_PATCH.git -b sm8750
+          dos2unix SCHED_PATCH/fengchi_oneplus_13t_b.patch
+          patch -d kernel_workspace/kernel_platform/common -p1 -F 3 < SCHED_PATCH/fengchi_oneplus_13t_b.patch
+
+      - name: Rename make name
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          sed -i 's/${scm_version}//' ./scripts/setlocalversion
+          # 保留 -4k 后缀与原内核一致，如需去掉取消注释下一行
+          # sed -i 's/-4k//g' ./arch/arm64/configs/gki_defconfig
+
+      - name: Build Kernel (running config as base + ipset + lz4)
+        run: |
+          cd kernel_workspace/kernel_platform/common
+          export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/kernel-build-tools/linux-x86/bin:$PATH"
+
+          mkdir -p "${{ env.CCACHE_DIR }}"
+          ccache -M "${{ env.CCACHE_MAXSIZE }}"
+          ccache -z
+          echo "=== 构建前 CCache 状态 ==="
+          ccache -s
+
+          # 禁用 defconfig 格式检查
+          sed -i 's/check_defconfig//' ./build.config.gki
+
+          # 先用 gki_defconfig 初始化 out 目录结构
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
+            O=out gki_defconfig
+
+          # 用设备实际运行的 config 覆盖，保留全部厂商配置
+          cp "$GITHUB_WORKSPACE/kernel_config" out/.config
+
+          # 追加 ipset 所需配置
+          cat <<'EOF' >> out/.config
+          # --- ipset ---
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPMARK=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_IPMAC=y
+          CONFIG_IP_SET_HASH_MAC=y
+          CONFIG_IP_SET_HASH_NETPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_LIST_SET=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_BPF_STREAM_PARSER=y
+          CONFIG_IP6_NF_NAT=y
+          CONFIG_IP6_NF_TARGET_MASQUERADE=y
+          # --- 其他优化 ---
+          CONFIG_HEADERS_INSTALL=n
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          EOF
+
+          # LZ4 升级：将 ZRAM 默认压缩算法从 lzo-rle 改为 lz4
+          if [ "${{ inputs.lz4_upgrade }}" = "true" ]; then
+            echo "[+] 升级 ZRAM 默认压缩算法为 LZ4"
+            sed -i 's/CONFIG_ZRAM_DEF_COMP_LZORLE=y/# CONFIG_ZRAM_DEF_COMP_LZORLE is not set/' out/.config
+            sed -i 's/# CONFIG_ZRAM_DEF_COMP_LZ4 is not set/CONFIG_ZRAM_DEF_COMP_LZ4=y/' out/.config
+            sed -i 's/CONFIG_ZRAM_DEF_COMP="lzo-rle"/CONFIG_ZRAM_DEF_COMP="lz4"/' out/.config
+            # LZ4HC 加密支持（HC 压缩率更高）
+            sed -i 's/# CONFIG_CRYPTO_LZ4HC is not set/CONFIG_CRYPTO_LZ4HC=y/' out/.config
+          fi
+
+          # olddefconfig：自动处理新增/删除的 Kconfig 符号，不弹交互提示
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
+            O=out olddefconfig
+
+          # 验证 ipset 已进入最终配置
+          echo "=== 验证 ipset 配置 ==="
+          grep "CONFIG_IP_SET" out/.config
+          grep "CONFIG_ZRAM_DEF_COMP" out/.config
+
+          # 正式编译
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld KCFLAGS+=-O2 KCFLAGS+=-Wno-error \
+            O=out Image
+
+          git restore . || true
+          git clean -fd || true
+
+          echo "=== 构建后 CCache 状态 ==="
+          ccache -s
+
+      - name: Make AnyKernel3
+        run: |
+          git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1
+          cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3/
+
+      - name: Upload AnyKernel3
+        uses: actions/upload-artifact@v4
+        with:
+          name: PKX110_AnyKernel3${{ inputs.Apply_SCHED && '_sched' || '' }}_ipset${{ inputs.lz4_upgrade && '_lz4' || '' }}
+          path: ./AnyKernel3/*
+
+      - name: Force Save Ccache
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-oneplus-13t-v1-${{ github.run_id }}
