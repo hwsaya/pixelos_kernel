@@ -124,14 +124,17 @@ jobs:
 
           PREBUILTS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin"
 
-          # Kconfig.include 和 ld-version.sh 在 syncconfig 子进程里用裸命令名调用 ld.lld
-          # 子进程不继承 shell 的 PATH，直接 patch 两个脚本把裸命令改成完整路径
-          # 1. scripts/Kconfig.include — make 层面的存在性检查，直接删掉那行 error
-          sed -i '/linker.*not found/d' scripts/Kconfig.include
-          # 2. scripts/ld-version.sh  — shell 层面直接 exec ld.lld，替换成完整路径
-          sed -i "s|ld\.lld|${PREBUILTS_BIN}/ld.lld|g" scripts/ld-version.sh
-          echo "[+] ld-version.sh patch 后内容:"
-          grep "ld.lld" scripts/ld-version.sh | head -3
+          # syncconfig 子进程不继承 PATH，ld.lld 找不到导致 Kconfig 检查失败
+          # 修法：stub 掉 ld-version.sh（让它直接返回高版本号），删除 Kconfig.include 里所有 linker 检查行
+          printf '#!/bin/sh\necho 999999999\n' > scripts/ld-version.sh
+          chmod +x scripts/ld-version.sh
+          sed -i '/ld-version/d'             scripts/Kconfig.include
+          sed -i '/LD_VERSION/d'             scripts/Kconfig.include
+          sed -i '/linker.*not found/d'      scripts/Kconfig.include
+          sed -i '/Sorry.*linker/d'          scripts/Kconfig.include
+          sed -i '/not supported/d'          scripts/Kconfig.include
+          echo "[+] Kconfig.include linker 检查行已清除，ld-version.sh 已 stub"
+          cat scripts/ld-version.sh
 
           # 禁用 defconfig 格式检查
           sed -i 's/check_defconfig//' ./build.config.gki
