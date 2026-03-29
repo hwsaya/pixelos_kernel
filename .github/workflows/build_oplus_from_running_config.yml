@@ -125,6 +125,10 @@ jobs:
           # 禁用 defconfig 格式检查
           sed -i 's/check_defconfig//' ./build.config.gki
 
+          # 移除 Kconfig.include 中对 linker 的预检（ld.lld 在 prebuilts 里，syncconfig 子进程找不到）
+          sed -i '/linker.*not found/d' scripts/Kconfig.include
+          sed -i '/$(error.*ld\b/d' scripts/Kconfig.include
+
           # 直接创建 out 目录，无需 gki_defconfig
           mkdir -p out
 
