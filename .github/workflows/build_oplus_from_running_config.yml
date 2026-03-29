@@ -128,11 +128,11 @@ jobs:
           # 修法：stub 掉 ld-version.sh（让它直接返回高版本号），删除 Kconfig.include 里所有 linker 检查行
           printf '#!/bin/sh\necho 999999999\n' > scripts/ld-version.sh
           chmod +x scripts/ld-version.sh
-          sed -i '/ld-version/d'             scripts/Kconfig.include
-          sed -i '/LD_VERSION/d'             scripts/Kconfig.include
+          # 只删 error 行，LD_VERSION 定义必须保留（init/Kconfig 依赖它）
+          # stub 返回 999999999，版本比较自动通过
           sed -i '/linker.*not found/d'      scripts/Kconfig.include
           sed -i '/Sorry.*linker/d'          scripts/Kconfig.include
-          sed -i '/not supported/d'          scripts/Kconfig.include
+          sed -i '/not supported.*lld/d'     scripts/Kconfig.include
           echo "[+] Kconfig.include linker 检查行已清除，ld-version.sh 已 stub"
           cat scripts/ld-version.sh
 
