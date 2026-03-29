@@ -37,13 +37,15 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }} --depth=1
           repo sync -j$(nproc) --no-clone-bundle --no-tags
 
-      - name: 注入内核配置并禁用格式检查
+      - name: 注入内核配置 (遵循 savedefconfig 严格排序)
         run: |
           cd /mnt/kernel_workspace/common
-          cat <<EOF >> arch/arm64/configs/gki_defconfig
-          CONFIG_BPF_STREAM_PARSER=y
-          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_FILE="arch/arm64/configs/gki_defconfig"
+          
+          sed -i '/CONFIG_NETFILTER_XTABLES_COMPAT=y/a CONFIG_NETFILTER_XT_SET=y' $CONFIG_FILE
+          sed -i '/CONFIG_NETFILTER_XT_TARGET_TCPMSS=y/a CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y' $CONFIG_FILE
+          
+          cat <<EOF > ip_set_configs.txt
           CONFIG_IP_SET=y
           CONFIG_IP_SET_MAX=65534
           CONFIG_IP_SET_BITMAP_IP=y
@@ -62,16 +64,11 @@ jobs:
           CONFIG_IP_SET_HASH_NETPORT=y
           CONFIG_IP_SET_HASH_NETIFACE=y
           CONFIG_IP_SET_LIST_SET=y
-          CONFIG_IP6_NF_NAT=y
-          CONFIG_IP6_NF_TARGET_MASQUERADE=y
           EOF
+          sed -i '/CONFIG_NETFILTER_XT_MATCH_U32=y/r ip_set_configs.txt' $CONFIG_FILE
           
-          cd /mnt/kernel_workspace
-          # 禁用 Android 15 (Kleaf/Bazel) 严格的 defconfig 格式校验
-          find build/kernel/kleaf -type f -name "*.bzl" -exec sed -i 's/check_defconfig = True/check_defconfig = False/g' {} +
-          if [ -f "build/kernel/_setup_env.sh" ]; then
-            sed -i 's/cmp -s "${source_config}" "${OUT_DIR}\/defconfig"/true/g' build/kernel/_setup_env.sh
-          fi
+          sed -i '/CONFIG_IP6_NF_RAW=y/a CONFIG_IP6_NF_NAT=y\nCONFIG_IP6_NF_TARGET_MASQUERADE=y' $CONFIG_FILE
+          sed -i '/CONFIG_CGROUP_NET_PRIO=y/a CONFIG_BPF_STREAM_PARSER=y' $CONFIG_FILE
 
       - name: 编译内核
         run: |
