@@ -1,206 +1,92 @@
-name: OnePlus 13T Kernel Build
+name: Build Pure GKI Kernel 6.6 (AnyKernel3)
 
 on:
   workflow_dispatch:
     inputs:
-      pull_kernel_src:
-        description: "是否拉取远程内核源码(否则使用缓存)"
-        required: false
-        type: boolean
-        default: false
-      better_net:
-        description: "是否开启网络功能增强配置 (ipset)"
-        required: false
-        type: boolean
-        default: true
-      baseband_guard:
-        description: "是否开启内核级基带保护"
+      manifest_branch:
+        description: '谷歌 GKI 分支'
         required: true
-        type: boolean
-        default: false
+        default: 'common-android15-6.6'
 
 jobs:
-  build:
-    name: OnePlus 13T Kernel Build
+  build-kernel:
     runs-on: ubuntu-latest
-    env:
-      CCACHE_COMPILERCHECK: "none"
-      CCACHE_COMPRESS: "1"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_HARDLINK: "true"
-      CCACHE_DIR: ${{ github.workspace }}/.ccache_oneplus_13t
-      CCACHE_MAXSIZE: "3G"
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: 强力清理磁盘空间
         run: |
-          sudo apt-get install -y --no-install-recommends libelf-dev tree dos2unix ccache
+          sudo docker image prune -a -f
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup /opt/pipx
+          sudo apt-get clean
+          df -h
 
-      - name: Cache prebuilts (clang & build-tools)
-        id: prebuilts-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928
-            kernel_workspace/kernel_platform/prebuilts/kernel-build-tools/linux-x86
-          key: prebuilts-${{ runner.os }}-v1
-
-      - name: Cache kernel source
-        id: kernel-src-cache
-        uses: actions/cache@v4
-        with:
-          path: kernel_workspace/kernel_platform/common
-          key: kernel-src-v6.6.89
-          restore-keys:
-            kernel-src-v6.6.89
-
-      - name: Cache ccache
-        id: ccache-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-oneplus-13t-v1
-          restore-keys:
-            ccache-${{ runner.os }}-oneplus-13t-v1-
-
-      - name: Configure Git and repo
+      - name: 安装依赖工具
         run: |
-          git config --global user.email "bot@kernelsu.org"
-          git config --global user.name "GitHubAction"
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
-          chmod a+x ~/repo
-          sudo mv ~/repo /usr/local/bin/repo
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl git python3 rsync zip
+          mkdir -p ~/.bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+          chmod a+rx ~/.bin/repo
+          echo "$HOME/.bin" >> $GITHUB_PATH
 
-      - name: Initialize repo and sync
+      - name: 初始化并同步源码
         run: |
-          mkdir -p kernel_workspace && cd kernel_workspace
-          repo init -u https://github.com/OnePlusOSS/kernel_manifest.git \
-            -b refs/heads/oneplus/sm8750 -m oneplus_13t_b.xml --depth=1
+          sudo chown $USER /mnt
+          mkdir -p /mnt/kernel_workspace && cd /mnt/kernel_workspace
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          repo init -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }} --depth=1
+          repo sync -j$(nproc) --no-clone-bundle --no-tags
 
-          if [ "${{ inputs.pull_kernel_src }}" = "true" ] || \
-             [ "${{ steps.kernel-src-cache.outputs.cache-hit }}" = "false" ]; then
-            repo sync kernel_platform/common \
-              -c --force-sync --optimized-fetch --prune --no-tags --no-clone-bundle \
-              -j$(nproc --all)
-          fi
-
-          if [ "${{ steps.prebuilts-cache.outputs.cache-hit }}" = "false" ]; then
-            repo sync kernel_platform/prebuilts/clang/host/linux-x86 \
-                      kernel_platform/prebuilts/kernel-build-tools \
-              -c --force-sync --optimized-fetch --prune --no-tags --no-clone-bundle \
-              -j$(nproc --all)
-          fi
-
-          rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
-
-      # OGKI 转换 GKI，无需修改 dtbo 开机
-      - name: Apply Convert HMBIRD_OGKI to HMBIRD_GKI
+      - name: 注入内核配置
         run: |
-          cp hmbird_patch.c kernel_workspace/kernel_platform/common/drivers/
-          cd kernel_workspace/kernel_platform/common/drivers
-          if ! grep -q "hmbird_patch.o" Makefile; then
-            echo "obj-y += hmbird_patch.o" >> Makefile
-          fi
+          cd /mnt/kernel_workspace/common
+          cat <<EOF >> arch/arm64/configs/gki_defconfig
+          CONFIG_BPF_STREAM_PARSER=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPMARK=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_IPMAC=y
+          CONFIG_IP_SET_HASH_MAC=y
+          CONFIG_IP_SET_HASH_NETPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_LIST_SET=y
+          CONFIG_IP6_NF_NAT=y
+          CONFIG_IP6_NF_TARGET_MASQUERADE=y
+          EOF
 
-      - name: Add iptables extensions
-        if: ${{ inputs.better_net }}
+      - name: 编译内核
         run: |
-          cd kernel_workspace/kernel_platform/common
-          {
-            echo "CONFIG_BPF_STREAM_PARSER=y"
-            echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y"
-            echo "CONFIG_NETFILTER_XT_SET=y"
-            echo "CONFIG_IP_SET=y"
-            echo "CONFIG_IP_SET_MAX=65534"
-            echo "CONFIG_IP_SET_BITMAP_IP=y"
-            echo "CONFIG_IP_SET_BITMAP_IPMAC=y"
-            echo "CONFIG_IP_SET_BITMAP_PORT=y"
-            echo "CONFIG_IP_SET_HASH_IP=y"
-            echo "CONFIG_IP_SET_HASH_IPMARK=y"
-            echo "CONFIG_IP_SET_HASH_IPPORT=y"
-            echo "CONFIG_IP_SET_HASH_IPPORTIP=y"
-            echo "CONFIG_IP_SET_HASH_IPPORTNET=y"
-            echo "CONFIG_IP_SET_HASH_IPMAC=y"
-            echo "CONFIG_IP_SET_HASH_MAC=y"
-            echo "CONFIG_IP_SET_HASH_NETPORTNET=y"
-            echo "CONFIG_IP_SET_HASH_NET=y"
-            echo "CONFIG_IP_SET_HASH_NETNET=y"
-            echo "CONFIG_IP_SET_HASH_NETPORT=y"
-            echo "CONFIG_IP_SET_HASH_NETIFACE=y"
-            echo "CONFIG_IP_SET_LIST_SET=y"
-            echo "CONFIG_IP6_NF_NAT=y"
-            echo "CONFIG_IP6_NF_TARGET_MASQUERADE=y"
-          } >> ./arch/arm64/configs/gki_defconfig
+          cd /mnt/kernel_workspace
+          tools/bazel run //common:kernel_aarch64_dist -- --dist_dir=out/dist --lto=thin
 
-      - name: Setup Baseband-guard
-        if: ${{ inputs.baseband_guard }}
+      - name: 打包 AnyKernel3
         run: |
-          cd kernel_workspace/kernel_platform/common
-          curl -LSs "https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh" | bash
-          echo "CONFIG_BBG=y" >> ./arch/arm64/configs/gki_defconfig
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/lockdown/lockdown,baseband_guard/ } }' security/Kconfig
+          git clone https://github.com/osm0sis/AnyKernel3.git
+          rm -rf AnyKernel3/.git
+          
+          cp /mnt/kernel_workspace/out/dist/Image AnyKernel3/
+          
+          cd AnyKernel3
+          sed -i 's/kernel.string=.*/kernel.string=Pure GKI 6.6 No-Root/' anykernel.sh
+          sed -i 's/^do.devicecheck=.*/do.devicecheck=0/' anykernel.sh
+          sed -i 's/^block=.*/block=auto;/' anykernel.sh
+          sed -i 's/^is_slot_device=.*/is_slot_device=0;/' anykernel.sh
+          zip -r9 ../AnyKernel3-GKI-6.6.zip *
 
-      - name: Other tasks
-        run: |
-          cd kernel_workspace/kernel_platform/common
-          echo "CONFIG_HEADERS_INSTALL=n" >> ./arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./arch/arm64/configs/gki_defconfig
-          sed -i 's/check_defconfig//' ./build.config.gki
-
-      - name: Rename make name
-        run: |
-          cd kernel_workspace/kernel_platform/common
-          sed -i 's/${scm_version}//' ./scripts/setlocalversion
-          sed -i 's/-4k//g' ./arch/arm64/configs/gki_defconfig
-
-      - name: Build Kernel
-        run: |
-          cd kernel_workspace/kernel_platform/common
-          export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/kernel-build-tools/linux-x86/bin:$PATH"
-
-          mkdir -p "${{ env.CCACHE_DIR }}"
-          ccache -M "${{ env.CCACHE_MAXSIZE }}"
-
-          ccache -z
-          echo "=== 构建前 CCache 状态 ==="
-          ccache -s
-
-          # stub ld-version.sh 返回高版本号，让所有版本比较自动通过
-          # 不删整行，只把 $(error ...) 替换为空，保留行结构避免 init/Kconfig syntax error
-          printf '#!/bin/sh\necho 999999999\n' > scripts/ld-version.sh
-          chmod +x scripts/ld-version.sh
-          sed -i 's/$(error linker[^)]*not found)//' scripts/Kconfig.include
-          sed -i 's/$(error Sorry[^)]*)//'           scripts/Kconfig.include
-
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-          CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
-          O=out gki_defconfig
-
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-          CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld KCFLAGS+=-O2 KCFLAGS+=-Wno-error \
-          O=out Image
-
-          git restore . || true
-          git clean -fd || true
-
-          echo "=== 构建后 CCache 状态 ==="
-          ccache -s
-
-      - name: Make AnyKernel3
-        run: |
-          git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1
-          cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3/
-
-      - name: Upload AnyKernel3
+      - name: 提取并上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: PKX110_AnyKernel3_ksu${{ inputs.better_net && '_ipt' || '' }}${{ inputs.baseband_guard && '_bbg' || '' }}
-          path: ./AnyKernel3/*
-
-      - name: Force Save Ccache
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-oneplus-13t-v1-${{ github.run_id }}
+          name: AnyKernel3-GKI-6.6-NoRoot
+          path: AnyKernel3-GKI-6.6.zip
