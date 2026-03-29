@@ -184,6 +184,9 @@ jobs:
           grep "CONFIG_IP_SET" out/.config
           grep "CONFIG_ZRAM_DEF_COMP" out/.config
 
+          # syncconfig 子进程不继承 PATH，将 ld.lld 软链到系统 PATH
+          sudo ln -sf "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin/ld.lld" /usr/local/bin/ld.lld
+
           # 正式编译
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
             CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld KCFLAGS+=-O2 KCFLAGS+=-Wno-error \
