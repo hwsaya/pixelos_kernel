@@ -12,11 +12,6 @@ on:
         required: false
         type: boolean
         default: false
-      Apply_SCHED:
-        description: "是否添加风驰驱动"
-        required: false
-        type: boolean
-        default: false
       lz4_upgrade:
         description: "是否将 ZRAM 默认压缩算法升级为 LZ4"
         required: false
@@ -50,7 +45,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get install -y --no-install-recommends libelf-dev tree dos2unix ccache
+          sudo apt-get install -y --no-install-recommends libelf-dev tree ccache
 
       - name: Cache prebuilts (clang & build-tools)
         id: prebuilts-cache
@@ -108,22 +103,6 @@ jobs:
           fi
 
           rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
-
-      - name: Apply Convert HMBIRD_OGKI to HMBIRD_GKI
-        if: ${{ !inputs.Apply_SCHED }}
-        run: |
-          cp hmbird_patch.c kernel_workspace/kernel_platform/common/drivers/
-          cd kernel_workspace/kernel_platform/common/drivers
-          if ! grep -q "hmbird_patch.o" Makefile; then
-            echo "obj-y += hmbird_patch.o" >> Makefile
-          fi
-
-      - name: Apply SCHED
-        if: ${{ inputs.Apply_SCHED }}
-        run: |
-          git clone https://github.com/Numbersf/SCHED_PATCH.git -b sm8750
-          dos2unix SCHED_PATCH/fengchi_oneplus_13t_b.patch
-          patch -d kernel_workspace/kernel_platform/common -p1 -F 3 < SCHED_PATCH/fengchi_oneplus_13t_b.patch
 
       - name: Rename make name
         run: |
@@ -224,7 +203,7 @@ jobs:
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v4
         with:
-          name: PKX110_AnyKernel3${{ inputs.Apply_SCHED && '_sched' || '' }}_ipset${{ inputs.lz4_upgrade && '_lz4' || '' }}
+          name: PKX110_AnyKernel3_ipset${{ inputs.lz4_upgrade && '_lz4' || '' }}
           path: ./AnyKernel3/*
 
       - name: Force Save Ccache
