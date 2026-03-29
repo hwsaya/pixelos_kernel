@@ -127,7 +127,7 @@ jobs:
 
           # 先用 gki_defconfig 初始化 out 目录结构
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
+            CC="ccache clang" PAHOLE=pahole LD=ld.lld \
             O=out gki_defconfig
 
           # 用设备实际运行的 config 覆盖，保留全部厂商配置
@@ -176,7 +176,7 @@ jobs:
 
           # olddefconfig：自动处理新增/删除的 Kconfig 符号，不弹交互提示
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
+            CC="ccache clang" PAHOLE=pahole LD=ld.lld \
             O=out olddefconfig
 
           # 验证 ipset 已进入最终配置
