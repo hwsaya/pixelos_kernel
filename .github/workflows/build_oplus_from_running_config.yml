@@ -167,12 +167,12 @@ jobs:
           echo "=== 构建前 CCache 状态 ==="
           ccache -s
 
-          # stub ld-version.sh + 删 Kconfig.include error 行
-          # gki_defconfig/syncconfig 子进程不继承 PATH，会找不到 ld.lld
+          # stub ld-version.sh 返回高版本号，让所有版本比较自动通过
+          # 不删整行，只把 $(error ...) 替换为空，保留行结构避免 init/Kconfig syntax error
           printf '#!/bin/sh\necho 999999999\n' > scripts/ld-version.sh
           chmod +x scripts/ld-version.sh
-          sed -i '/linker.*not found/d' scripts/Kconfig.include
-          sed -i '/Sorry.*linker/d'     scripts/Kconfig.include
+          sed -i 's/$(error linker[^)]*not found)//' scripts/Kconfig.include
+          sed -i 's/$(error Sorry[^)]*)//'           scripts/Kconfig.include
 
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
           CC="ccache clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
