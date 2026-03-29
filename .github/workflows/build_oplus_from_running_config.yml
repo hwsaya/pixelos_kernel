@@ -122,12 +122,16 @@ jobs:
           echo "=== 构建前 CCache 状态 ==="
           ccache -s
 
+          # syncconfig/ld-version.sh 在子进程中直接 exec 工具名，不继承 make 的 PATH
+          # 必须在所有 make 操作之前将工具软链到系统 PATH
+          PREBUILTS_BIN="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin"
+          sudo ln -sf "$PREBUILTS_BIN/ld.lld"   /usr/local/bin/ld.lld
+          sudo ln -sf "$PREBUILTS_BIN/clang"     /usr/local/bin/clang
+          sudo ln -sf "$PREBUILTS_BIN/llvm-ar"   /usr/local/bin/llvm-ar
+          echo "[+] 软链验证: $(ld.lld --version 2>&1 | head -1)"
+
           # 禁用 defconfig 格式检查
           sed -i 's/check_defconfig//' ./build.config.gki
-
-          # 移除 Kconfig.include 中对 linker 的预检（ld.lld 在 prebuilts 里，syncconfig 子进程找不到）
-          sed -i '/linker.*not found/d' scripts/Kconfig.include
-          sed -i '/$(error.*ld\b/d' scripts/Kconfig.include
 
           # 直接创建 out 目录，无需 gki_defconfig
           mkdir -p out
@@ -183,9 +187,6 @@ jobs:
           echo "=== 验证 ipset 配置 ==="
           grep "CONFIG_IP_SET" out/.config
           grep "CONFIG_ZRAM_DEF_COMP" out/.config
-
-          # syncconfig 子进程不继承 PATH，将 ld.lld 软链到系统 PATH
-          sudo ln -sf "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin/ld.lld" /usr/local/bin/ld.lld
 
           # 正式编译
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
