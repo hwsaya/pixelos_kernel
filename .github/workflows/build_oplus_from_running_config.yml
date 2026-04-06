@@ -58,12 +58,12 @@ jobs:
           cd kernel_workspace/kernel_platform/common
           
           # 1. 注入你上传的 config 文件
-          if [ -f "$GITHUB_WORKSPACE/config" ]; then
-             dos2unix $GITHUB_WORKSPACE/config
+          if [ -f "$GITHUB_WORKSPACE/kernel_config" ]; then
+             dos2unix $GITHUB_WORKSPACE/kernel_config
              echo "=== 正在注入自定义配置 ==="
-             cat $GITHUB_WORKSPACE/config >> arch/arm64/configs/gki_defconfig
+             cat $GITHUB_WORKSPACE/kernel_config >> arch/arm64/configs/gki_defconfig
           else
-             echo "错误：未在仓库根目录找到 config 文件"
+             echo "错误：未在仓库根目录找到 kernel_config 文件"
              exit 1
           fi
 
