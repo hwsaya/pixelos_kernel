@@ -1,12 +1,12 @@
-name: Build Pure GKI Kernel 6.6 (AnyKernel3)
+name: Build OnePlus 13T Kernel (Force 6.6.121-4k)
 
 on:
   workflow_dispatch:
     inputs:
-      manifest_branch:
-        description: '谷歌 GKI 分支'
+      localversion:
+        description: '内核版本后缀'
         required: true
-        default: 'common-android15-6.6'
+        default: '-4k'
 
 jobs:
   build-kernel:
@@ -17,80 +17,90 @@ jobs:
           sudo docker image prune -a -f
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup /opt/pipx
           sudo apt-get clean
-          df -h
+
+      - name: 检出当前仓库
+        uses: actions/checkout@v4
 
       - name: 安装依赖工具
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl git python3 rsync zip
-          mkdir -p ~/.bin
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
-          chmod a+rx ~/.bin/repo
-          echo "$HOME/.bin" >> $GITHUB_PATH
+          sudo apt-get install -y build-essential curl git python3 rsync zip dos2unix tree flex bison libssl-dev libelf-dev ccache
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
 
-      - name: 初始化并同步源码
+      - name: 拉取 OnePlusOSS 内核源码
         run: |
-          sudo chown $USER /mnt
-          mkdir -p /mnt/kernel_workspace && cd /mnt/kernel_workspace
-          git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          repo init -u https://android.googlesource.com/kernel/manifest -b ${{ github.event.inputs.manifest_branch }} --depth=1
-          repo sync -j$(nproc) --no-clone-bundle --no-tags
+          git config --global user.name "GitHub Action"
+          mkdir -p kernel_workspace && cd kernel_workspace
+          
+          repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/oneplus/sm8750 -m oneplus_13t_b.xml --depth=1
+          repo sync kernel_platform/common kernel_platform/prebuilts/clang/host/linux-x86 kernel_platform/prebuilts/kernel-build-tools -c --force-sync --optimized-fetch --prune --no-tags --no-clone-bundle -j$(nproc --all)
 
-      - name: 注入内核配置 (遵循 savedefconfig 严格排序)
+      - name: 注入自定义内核配置并锁定版本号
         run: |
-          cd /mnt/kernel_workspace/common
-          CONFIG_FILE="arch/arm64/configs/gki_defconfig"
+          cd kernel_workspace/kernel_platform/common
           
-          sed -i '/CONFIG_NETFILTER_XTABLES_COMPAT=y/a CONFIG_NETFILTER_XT_SET=y' $CONFIG_FILE
-          sed -i '/CONFIG_NETFILTER_XT_TARGET_TCPMSS=y/a CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y' $CONFIG_FILE
+          # 1. 注入你上传的 config 文件
+          if [ -f "$GITHUB_WORKSPACE/config" ]; then
+             dos2unix $GITHUB_WORKSPACE/config
+             echo "=== 正在注入自定义配置 ==="
+             cat $GITHUB_WORKSPACE/config >> arch/arm64/configs/gki_defconfig
+          else
+             echo "错误：未在仓库根目录找到 config 文件"
+             exit 1
+          fi
+
+          # 2. 强制锁定 Makefile 中的版本号为 6.6.121
+          echo "=== 正在强制修改内核版本号 ==="
+          sed -i 's/^VERSION = .*/VERSION = 6/' Makefile
+          sed -i 's/^PATCHLEVEL = .*/PATCHLEVEL = 6/' Makefile
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 121/' Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION = /' Makefile
+
+          # 3. 处理本地后缀 (去掉 git hash，加上 -4k)
+          sed -i 's/${scm_version}//' scripts/setlocalversion
+          sed -i 's/-4k//g' arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LOCALVERSION=\"${{ github.event.inputs.localversion }}\"" >> arch/arm64/configs/gki_defconfig
           
-          cat <<EOF > ip_set_configs.txt
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=65534
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPMARK=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_IPMAC=y
-          CONFIG_IP_SET_HASH_MAC=y
-          CONFIG_IP_SET_HASH_NETPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_IP_SET_LIST_SET=y
-          EOF
-          sed -i '/CONFIG_NETFILTER_XT_MATCH_U32=y/r ip_set_configs.txt' $CONFIG_FILE
-          
-          sed -i '/CONFIG_IP6_NF_RAW=y/a CONFIG_IP6_NF_NAT=y\nCONFIG_IP6_NF_TARGET_MASQUERADE=y' $CONFIG_FILE
-          sed -i '/CONFIG_CGROUP_NET_PRIO=y/a CONFIG_BPF_STREAM_PARSER=y' $CONFIG_FILE
+          # 4. 禁用 defconfig 检查
+          sed -i 's/check_defconfig//' build.config.gki
 
       - name: 编译内核
         run: |
-          cd /mnt/kernel_workspace
-          tools/bazel run --lto=thin //common:kernel_aarch64_dist -- --dist_dir=out/dist
+          cd kernel_workspace/kernel_platform/common
+          export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/kernel-build-tools/linux-x86/bin:$PATH"
 
-      - name: 打包 AnyKernel3
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+          CC="clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld \
+          O=out gki_defconfig
+
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+          CC="clang" PAHOLE=pahole LD=ld.lld HOSTLD=ld.lld KCFLAGS+=-O2 KCFLAGS+=-Wno-error \
+          O=out Image
+
+      - name: 验证版本号并打包 AnyKernel3
         run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git
+          # 检查编译出的内核版本字符串是否正确
+          KERNEL_STR=$(strings kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image | grep "Linux version 6.6.121" | head -n 1)
+          echo "编译出的内核版本为: $KERNEL_STR"
+          
+          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1
           rm -rf AnyKernel3/.git
           
-          cp /mnt/kernel_workspace/out/dist/Image AnyKernel3/
+          cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image AnyKernel3/
           
           cd AnyKernel3
-          sed -i 's/kernel.string=.*/kernel.string=Pure GKI 6.6 No-Root/' anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=OnePlus 13T 6.6.121-4k/' anykernel.sh
           sed -i 's/^do.devicecheck=.*/do.devicecheck=0/' anykernel.sh
-          sed -i 's/^block=.*/block=auto;/' anykernel.sh
-          sed -i 's/^is_slot_device=.*/is_slot_device=0;/' anykernel.sh
-          zip -r9 ../AnyKernel3-GKI-6.6.zip *
+          sed -i 's/^block=.*/block=\/dev\/block\/by-name\/boot;/' anykernel.sh
+          sed -i 's/^is_slot_device=.*/is_slot_device=auto;/' anykernel.sh
+          
+          zip -r9 ../AnyKernel3-OnePlus-13T-6.6.121-4k.zip *
 
       - name: 提取并上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: AnyKernel3-GKI-6.6-NoRoot
-          path: AnyKernel3-GKI-6.6.zip
+          name: AnyKernel3-OnePlus-13T-6.6.121-4k
+          path: AnyKernel3-OnePlus-13T-6.6.121-4k.zip
