@@ -38,6 +38,21 @@ jobs:
           repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/oneplus/sm8750 -m oneplus_13t_b.xml --depth=1
           repo sync kernel_platform/common kernel_platform/prebuilts/clang/host/linux-x86 kernel_platform/prebuilts/kernel-build-tools -c --force-sync --optimized-fetch --prune --no-tags --no-clone-bundle -j$(nproc --all)
 
+      - name: 转换 OGKI 为 GKI (HMBIRD Patch)
+        run: |
+          if [ -f "$GITHUB_WORKSPACE/hmbird_patch.c" ]; then
+            echo "=== 找到 hmbird_patch.c，正在应用补丁 ==="
+            cp $GITHUB_WORKSPACE/hmbird_patch.c kernel_workspace/kernel_platform/common/drivers/
+            cd kernel_workspace/kernel_platform/common/drivers
+            # 修改 Makefile 将补丁编译进内核
+            if ! grep -q "hmbird_patch.o" Makefile; then
+              echo "obj-y += hmbird_patch.o" >> Makefile
+            fi
+          else
+            echo "致命错误：未在仓库根目录找到 hmbird_patch.c！缺少此补丁可能导致无法在第三方 ROM 开机。"
+            exit 1
+          fi
+
       - name: 注入自定义内核配置并锁定版本号
         run: |
           cd kernel_workspace/kernel_platform/common
