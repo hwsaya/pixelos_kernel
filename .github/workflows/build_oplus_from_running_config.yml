@@ -129,16 +129,13 @@ jobs:
           KERNEL_STR=$(strings kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image | grep "Linux version 6.6.121" | head -n 1)
           echo "编译出的内核版本为: $KERNEL_STR"
           
-          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1
+          git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1
           rm -rf AnyKernel3/.git
           
           cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image AnyKernel3/
           
           cd AnyKernel3
-          sed -i 's/kernel.string=.*/kernel.string=OnePlus 13T 6.6.121-4k/' anykernel.sh
-          sed -i 's/^do.devicecheck=.*/do.devicecheck=0/' anykernel.sh
-          sed -i 's/^block=.*/block=\/dev\/block\/by-name\/boot;/' anykernel.sh
-          sed -i 's/^is_slot_device=.*/is_slot_device=auto;/' anykernel.sh
+          sed -i 's/kernel.string=.*/kernel.string=OnePlus 13T 6.6.121-4k/' anykernel.sh          
           
           zip -r9 ../AnyKernel3-OnePlus-13T-6.6.121-4k.zip *
 
